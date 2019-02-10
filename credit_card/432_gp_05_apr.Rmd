@@ -1,0 +1,355 @@
+---
+title: "432_groupproj_04_apr"
+author: "Yuhui Luo"
+date: "5/5/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, warning = FALSE, message = FALSE}
+#load all packages
+library(MASS)
+library(caret)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(mlbench)
+library(ISLR)
+library(ellipse)
+library(randomForest)
+library(gbm)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(klaR)
+library(gam)
+library(e1071)
+library(gbm)
+library(readr)
+library(xgboost)
+library(ROCR)
+library(pROC)
+```
+
+```{r}
+#load dataset
+credit_data = read.csv("credit_data.csv")
+credit_data = credit_data[-1]
+```
+
+```{r}
+#transfer the data of eduaction,sex and marriage
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 0, 5, credit_data$EDUCATION)
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 0, 3, credit_data$MARRIAGE)
+credit_data$SEX_M = ifelse(credit_data$SEX == 1, 1, 0)
+credit_data$SEX_F = ifelse(credit_data$SEX == 2, 1, 0)
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 1, "Graduate", 
+                               ifelse(credit_data$EDUCATION == 2, "College",
+                                      ifelse(credit_data$EDUCATION == 3, "HighSchool",
+                                             ifelse(credit_data$EDUCATION == 4, "Other", "Unknown"))))
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 1, "Married",
+                              ifelse(credit_data$MARRIAGE == 2, "Single", "Other"))
+```
+
+```{r}
+# dummy coding
+
+dmy_edu = dummyVars(" ~ EDUCATION", data = credit_data)
+new_edu = predict(dmy_edu, newdata = credit_data)
+
+dmy_mar = dummyVars(" ~ MARRIAGE", data = credit_data)
+new_mar = predict(dmy_mar, newdata = credit_data)
+
+# combine dummied coded variables with the original dataframe
+credit_new = cbind(credit_data, new_edu, new_mar)
+
+# drop original categorical variables and ID
+drop_vars = names(credit_new) %in% c("ID", "SEX", "EDUCATION", "MARRIAGE")
+credit_new = credit_new[!drop_vars]
+```
+
+```{r}
+set.seed(3)
+cred_idx = createDataPartition(credit_new$DEFAULT, p = 0.8, list = FALSE)
+
+levels(credit_new$DEFAULT) <- c("default", "no_default")
+credit_new$DEFAULT=factor(credit_new$DEFAULT)
+cred_trn = credit_new[cred_idx, ]
+cred_tst = credit_new[-cred_idx, ]
+```
+
+```{r}
+#accuracy function
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+```{r}
+#get variable importance by using GBM
+cred_boost = gbm((as.numeric(DEFAULT) - 1) ~ ., data = cred_trn, distribution = "bernoulli", n.trees = 5000, interaction.depth = 4, shrinkage = 0.01)
+summary(cred_boost)
+```
+
+```{r}
+#get variable importance by using Randomforest
+mod_rf = randomForest(DEFAULT ~ ., data = cred_trn)
+
+pred_rf_trn = predict(mod_rf, newdata = cred_trn)
+pred_rf_tst = predict(mod_rf, newdata = cred_tst)
+
+Conf_level = 0.20
+pred_rf_trn_response = ifelse(pred_rf_trn > Conf_level, 1, 0)
+pred_rf_tst_response = ifelse(pred_rf_tst > Conf_level, 1, 0)
+
+varImpPlot(mod_rf, main = "Variable Importance, RF", type = 2, pch = 16)
+grid()
+```
+
+```{r}
+#now we would like to update the new train and new test 
+#by the result from selection from GBM and RandomForest
+
+cred_trn_new = cred_trn[, 1:21]
+levels(cred_trn_new$DEFAULT) = c("default", "no_default")
+cred_tst_new = cred_tst[, 1:21]
+levels(cred_tst_new$DEFAULT) = c("default", "no_default")
+```
+
+```{r}
+# six forms for modelling
+small_form = formula(DEFAULT ~ PAY_1 + PAY_2)
+
+int_form   = formula(DEFAULT ~ PAY_1 * PAY_2)
+
+poly_form  = formula(DEFAULT ~ PAY_1 + PAY_2 + I(PAY_1 ^ 2) + I(PAY_2 ^ 2))
+
+big_form   = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6)
+
+huge_form  = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6
+                     + I(LIMIT_BAL ^ 2) + I(AGE ^ 2) + I(PAY_1 ^ 2) + I(PAY_2 ^ 2)                      +
+                     + I(PAY_3 ^ 2) + I(PAY_4 ^ 2) + I(PAY_5 ^ 2) + I(PAY_6 ^ 2) 
+                     + I(BILL_AMT1 ^ 2) + I(BILL_AMT2 ^ 2) + I(BILL_AMT3 ^ 2) 
+                     + I(BILL_AMT4 ^ 2) + I(BILL_AMT5 ^ 2) + I(BILL_AMT6 ^ 2) 
+                     + I(PAY_AMT1 ^ 2) + I(PAY_AMT2 ^ 2) + I(PAY_AMT3 ^ 2) 
+                     + I(PAY_AMT4 ^ 2) + I(PAY_AMT5 ^ 2) + I(PAY_AMT6 ^ 2))
+
+full_form  = formula(DEFAULT ~ .)
+```
+
+```{r}
+set.seed(3)
+rf_mod_small_form_roc = train(form = small_form,
+                              data = cred_trn_new,
+                              method = "rf",
+                              trControl = trainControl(method = "cv",
+                                                       classProbs = TRUE,
+                                                       summaryFunction = twoClassSummary),
+                              metric = "ROC")
+```
+
+```{r}
+set.seed(3)
+rf_mod_int_form_roc = train(form = int_form,
+                            data = cred_trn_new,
+                            method = "rf",
+                            trControl = trainControl(method = "cv",
+                                                     classProbs = TRUE,
+                                                     summaryFunction = twoClassSummary),
+                            metric = "ROC")
+```
+
+```{r}
+set.seed(3)
+rf_mod_poly_form_roc = train(form = poly_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+```{r}
+set.seed(3)
+rf_mod_big_form_roc = train(data = big_form,
+                            data = cred_trn_new,
+                            method = "rf",
+                            trControl = trainControl(method = "cv",
+                                                     classProbs = TRUE,
+                                                     summaryFunction = twoClassSummary),
+                            metric = "ROC")
+```
+
+```{r}
+set.seed(3)
+rf_mod_huge_form_roc = train(form = huge_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+```{r}
+set.seed(3)
+rf_mod_full_form_roc = train(form = full_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+```{r}
+#create a list for all models
+model_list_class_roc = list(
+  rf_mod_small_form_roc = rf_mod_small_form_roc,
+  rf_mod_int_form_roc = rf_mod_int_form_roc,
+  rf_mod_poly_form_roc = rf_mod_poly_form_roc,
+  rf_mod_big_form_roc = rf_mod_big_form_roc,
+  rf_mod_huge_form_roc = rf_mod_huge_form_roc,
+  rf_mod_full_form_roc = rf_mod_full_form_roc
+)
+```
+
+```{r,warning=FALSE}
+cv_roc = rep(0, length(model_list_class_roc))
+cv_sens= rep(0, length(model_list_class_roc))
+cv_spec= rep(0, length(model_list_class_roc))
+cv_acc = rep(0, length(model_list_class_roc))
+test_acc = rep(0, length(model_list_class_roc))
+for (i in seq_along(model_list_class_roc)) {
+  cv_roc[i] = model_list_class_roc[[i]]$results$ROC
+  cv_sens[i] = model_list_class_roc[[i]]$results$Sens
+  cv_spec[i] = model_list_class_roc[[i]]$results$Spec
+  cv_acc[i] = accuracy(cred_trn_new$DEFAULT,predict(model_list_class_roc[[i]], newdata = cred_trn_new))
+  test_acc[i] = accuracy(cred_tst_new$DEFAULT,predict(model_list_class_roc[[i]], newdata = cred_tst_new))
+}
+```
+
+
+```{r}
+cv_test_roc = rep(0, length(model_list_class_roc))
+test_acc = rep(0, length(model_list_class_roc))
+for (i in seq_along(model_list_class_roc)) {
+  test_prob = predict(model_list_class_roc[[i]], newdata = cred_tst_new)
+  test_roc = roc(cred_tst_new$DEFAULT ~ as.numeric(test_prob), plot = FALSE, print.auc = TRUE)
+  cv_test_roc[i] = as.numeric(test_roc$auc)
+  
+}
+```
+
+```{r}
+results_class = data.frame(models = c("RandomForest + Small Form", "RandomForest + Interaction Form",
+                                      "RandomForest + Poly Form", "RandomForest + Big Form",
+                                      "RandomForest + Huge Form", "RandomForest + Full Form"), 
+                           cv_roc = cv_roc,
+                           sd_sens = cv_sens,
+                           cv_spec = cv_spec,
+                           cv_acc = cv_acc,
+                           test_roc= cv_test_roc,
+                           test_acc = test_acc)
+
+colnames(results_class) = c("Method + Features", "ROC", "Sensitivity","Specificity","Train Accuracy","Test ROC","Test Accuracy")
+
+rownames(results_class) = NULL
+
+kable(results_class, format = "html", digits = 3) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE) %>%
+  row_spec(row = 4, bold = TRUE, color = "white", background = "lightgreen")
+```
+
+```{r}
+# for the histogram 
+
+#first create new variables that is the multiplication 
+# of the probability of the default and BILL_AMT1
+credit_data$balance_bill_amt1 = credit_data$BILL_AMT1*(predict(rf_mod_full_form_roc, credit_data, "prob")["default"])
+```
+
+
+
+```{r}
+# hist(credit_data$balance_bill_amt1[[1]], xlim = c(min(credit_data$balance_bill_amt1[[1]]), max(credit_data$balance_bill_amt1[[1]])
+# ), main = "Histogram for Balance", xlab = "Balance", ylab = "Count", col = "dodgerblue", breaks = seq(-150000, 1000000, by = 50000))
+```
+
+```{r}
+#convert all the negative value to zero 
+credit_data$balance_bill_amt1[which(credit_data$balance_bill_amt1 < 0), ] = 0  
+
+#create new variable and store all the 
+#Estimated Default Balance
+#
+credit_data$balance_bill_amt1[which(credit_data$balance_bill_amt1 >= 200000), ] = 200000 #cap 
+
+balance = credit_data$balance_bill_amt1[ ,1]
+```
+
+```{r}
+#histogram
+hist(balance,
+     col = "dodgerblue",
+     xlim = c(min(balance), max(balance)),
+     breaks = seq(0, 200000, 20000),
+     xlab = "Estimated Default Amount (NT Dollars)",
+     main = "Histogram of Estimated Default Balance (All)")
+```
+
+
+```{r}
+# the ratio that we define as risky group
+1 - length(which(balance < 50000)) / nrow(credit_data$balance_bill_amt1)
+```
+
+```{r}
+# create new variable that is high risk 
+# balance_highrisk = balance[which(balance > 50000)]
+# 
+# hist(balance_highrisk,
+#      col = "green",
+#      xlim = c(min(balance_highrisk), max(balance_highrisk)),
+#      
+#      xlab = "Estimated Default Amount (NT Dollars)",
+#      main = "Histogram for Estimated Default Balance (High Risk Group)")
+```
+
+
+```{r}
+# create new variable that is more risky 
+balance_morerisk = balance[which(balance > #50000)]
+
+hist(balance_morerisk,
+     col = "orange",
+     xlim = c(min(balance_highrisk), max(balance_highrisk)),
+     
+     xlab = "Estimated Default Amount (NT Dollars)",
+     main = "Histogram for Estimated Default Balance (More Risky Groups)")
+```
+
+```{r}
+balance_lowrisk = balance[which(balance <= 50000)]
+
+hist(balance_lowrisk,
+     col = "green",
+     xlim = c(min(balance_lowrisk), max(balance_lowrisk)),
+     xlab = "Balance",
+     main = "Histogram for Estimated Default Balance (Low Risk Group)")
+```
+
+
+

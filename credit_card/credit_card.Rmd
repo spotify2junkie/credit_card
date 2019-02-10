@@ -1,0 +1,264 @@
+---
+title: "Credit_card_yh"
+author: "Yuhui Luo"
+date: "4/26/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, warning = FALSE, message = FALSE}
+# suggested packages
+library(MASS)
+library(caret)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(mlbench)
+library(ISLR)
+library(ellipse)
+library(randomForest)
+library(gbm)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(klaR)
+library(gam)
+library(e1071)
+library(gbm)
+# feel free to use additional packages
+library(readr)
+library(xgboost)
+library(ROCR)
+```
+
+```{r}
+credit_data = read.csv("credit_data.csv")
+credit_data = credit_data[-1]
+```
+
+```{r}
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 0, 5, credit_data$EDUCATION)
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 0, 3, credit_data$MARRIAGE)
+credit_data$SEX_M = ifelse(credit_data$SEX == 1, 1, 0)
+credit_data$SEX_F = ifelse(credit_data$SEX == 2, 1, 0)
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 1, "Graduate", 
+                               ifelse(credit_data$EDUCATION == 2, "College",
+                                      ifelse(credit_data$EDUCATION == 3, "HighSchool",
+                                             ifelse(credit_data$EDUCATION == 4, "Other", "Unknown"))))
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 1, "Married",
+                              ifelse(credit_data$MARRIAGE == 2, "Single", "Other"))
+```
+
+```{r}
+dmy_edu = dummyVars(" ~ EDUCATION", data = credit_data)
+new_edu = predict(dmy_edu, newdata = credit_data)
+
+dmy_mar = dummyVars(" ~ MARRIAGE", data = credit_data)
+new_mar = predict(dmy_mar, newdata = credit_data)
+
+# combine dummied coded variables with the original dataframe
+credit_new = cbind(credit_data, new_edu, new_mar)
+
+# drop original categorical variables and ID
+drop_vars = names(credit_new) %in% c("ID", "SEX", "EDUCATION", "MARRIAGE")
+credit_new = credit_new[!drop_vars]
+
+# head(credit_new)
+```
+
+```{r}
+set.seed(3)
+cred_idx = createDataPartition(credit_new$DEFAULT, p = 0.8, list = FALSE)
+cred_trn = credit_new[cred_idx, ]
+cred_tst = credit_new[-cred_idx, ]
+```
+
+```{r}
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+```{r}
+cred_trn$DEFAULT=factor(cred_trn$DEFAULT)
+```
+
+```{r}
+cred_boost = gbm((as.numeric(DEFAULT) - 1) ~ ., data = cred_trn, distribution = "bernoulli",n.trees = 5000, interaction.depth = 4, shrinkage = 0.01)
+summary(cred_boost)
+```
+
+```{r}
+#now we would like to update the new train and new test 
+cred_trn_new=cred_trn[,1:21]
+cred_tst_new=cred_tst[,1:21]
+```
+
+
+```{r,fig.height = 7, fig.width = 12}
+featurePlot(x = cred_trn[ ,c(1:6)], y = cred_trn$DEFAULT, plot = "density",scales = list(x = list(relation = "free"), y = list(relation = "free")),
+adjust = 1.5, pch = "|", layout = c(6, 1),auto.key = list(columns = 2))
+```
+
+```{r,fig.height = 7, fig.width = 12}
+featurePlot(x = cred_trn[ ,c(7:12)], y = cred_trn$DEFAULT, plot = "density",scales = list(x = list(relation = "free"), y = list(relation = "free")),
+adjust = 1.5, pch = "|", layout = c(6, 1),auto.key = list(columns = 2))
+```
+
+```{r,fig.height = 7, fig.width = 12}
+featurePlot(x = cred_trn[ ,c(13:18)], y = cred_trn$DEFAULT, plot = "density",scales = list(x = list(relation = "free"), y = list(relation = "free")),
+adjust = 1.5, pch = "|", layout = c(6, 1),auto.key = list(columns = 2))
+```
+
+```{r,fig.height = 7, fig.width = 12}
+featurePlot(x = cred_trn[ ,c(19,20,22:25)], y = cred_trn$DEFAULT, plot = "density",scales = list(x = list(relation = "free"), y = list(relation = "free")),
+adjust = 1.5, pch = "|", layout = c(6, 1),auto.key = list(columns = 2))
+```
+
+```{r,fig.height = 7, fig.width = 12}
+featurePlot(x = cred_trn[ ,c(26:31)], y = cred_trn$DEFAULT, plot = "density",scales = list(x = list(relation = "free"), y = list(relation = "free")),
+adjust = 1.5, pch = "|", layout = c(6, 1),auto.key = list(columns = 2))
+```
+
+```{r}
+dtrain = sparse.model.matrix(DEFAULT ~ .-1, data=cred_trn_new)
+dtest = sparse.model.matrix(DEFAULT ~ .-1, data=cred_tst_new)
+# Set our hyperparameters
+param <- list(objective   = "binary:logistic",
+              eval_metric = "error",
+              max_depth   = 12,
+              eta         = 0.1,
+              gammma      = 1,
+              colsample_bytree = 1,
+              min_child_weight = 1)
+
+set.seed(657729094)
+train.label = as.numeric(cred_trn_new$DEFAULT)-1
+test.label = as.numeric(cred_tst_new$DEFAULT)
+# Pass in our hyperparameteres and train the model 
+xgb_cred = xgboost(
+  params  = param,
+  data    = dtrain,
+  label   = train.label,
+  nrounds = 500,
+  print_every_n = 100,
+  verbose = 1
+  )
+
+
+```
+
+
+```{r}
+gbm_cred_roc=train(DEFAULT~.,
+                   data=cred_trn,
+                   )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+(confusionMatrix(data = ifelse(predict(xgb_cred,dtest)>0.5,1,0),
+         reference = test.label, positive = "1")$table)
+```
+
+
+
+
+```{r}
+small_form = formula(DEFAULT ~ PAY_1 + PAY_2)
+int_form   = formula(DEFAULT ~ PAY_1 * PAY_2)
+poly_form  = formula(DEFAULT ~ PAY_1 + PAY_2 + I(PAY_1 ^ 2) + I(PAY_2 ^ 2))
+big_form   = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6)
+huge_form  = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6
+                     + I(LIMIT_BAL ^ 2) + I(AGE ^ 2) + I(PAY_1 ^ 2) + I(PAY_2 ^ 2)                      + I(PAY_3 ^ 2) + I(PAY_4 ^ 2) + I(PAY_5 ^ 2) + I(PAY_6 ^ 2) 
+                     + I(BILL_AMT1 ^ 2) + I(BILL_AMT2 ^ 2) + I(BILL_AMT3 ^ 2) 
+                     + I(BILL_AMT4 ^ 2) + I(BILL_AMT5 ^ 2) + I(BILL_AMT6 ^ 2) 
+                     + I(PAY_AMT1 ^ 2) + I(PAY_AMT2 ^ 2) + I(PAY_AMT3 ^ 2) 
+                     + I(PAY_AMT4 ^ 2) + I(PAY_AMT5 ^ 2) + I(PAY_AMT6 ^ 2))
+full_form  = formula(DEFAULT ~ .)
+
+```
+
+```{r,message = FALSE}
+#now tune for neural net
+numFolds = trainControl(method = 'cv', number = 5,verboseIter = FALSE)
+nnet_full_form_acc = train(full_form, data = cred_trn_new, method = 'nnet', preProcess = c('center', 'scale'), trControl = numFolds, tuneGrid=expand.grid(size=c(6), decay=c(0.001,0.01,0.1)))
+
+#cannot achieve roc for nnet 
+
+```
+
+```{r}
+(confusionMatrix(data = predict(nnet_full_form_acc,cred_tst_new),
+         reference = cred_tst_new$DEFAULT, positive = "1")$table)
+```
+
+```{r}
+# test cutoffs for accuracy tuned forest
+for (c in seq_along(cutoffs)) {
+  pred = ifelse(predict(nnet_full_form_acc, cred_tst_new, type = "prob")[[1]] > cutoffs[c],1,0)
+  score_acc[c] = score(predicted = pred,
+                       actual = cred_tst_new$DEFAULT)
+}
+```
+
+
+```{r}
+score = function(actual, predicted) {
+   10 * sum(predicted == 1 & actual == 1) +
+  -2 * sum(predicted == 1 & actual == 0) +
+  -5 * sum(predicted == 0 & actual == 1) +
+   1 * sum(predicted == 0 & actual == 0)
+}
+
+```
+
+
+```{r}
+cutoffs = seq(0.5, 1, by = 0.01)
+score_acc = rep(0, length(cutoffs))
+score_roc = rep(0, length(cutoffs))
+
+# test cutoffs for accuracy tuned forest
+for (c in seq_along(cutoffs)) {
+  pred = ifelse(predict(nnet_full_form_acc, cred_tst_new, type = "prob")[[1]] > cutoffs[c],1,0)
+  score_acc[c] = score(predicted = pred,
+                       actual = cred_tst_new$DEFAULT)
+}
+
+
+```
+
+
+```{r,echo = FALSE}
+plot(cutoffs, score_acc, type = "l", col = "dodgerblue", main = "Score vs Cutoff",
+     xlab = "cutoff", ylab = "score", lty = 1,
+     ylim = c(min(c(score_acc)), max(c(score_acc))))
+legend("bottomleft", c("Accuracy Tuned", "ROC Tuned"), lty = c(1, 2), 
+       lwd = 1, col = c("dodgerblue", "darkorange"))
+```
+

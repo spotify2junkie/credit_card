@@ -1,0 +1,471 @@
+---
+title: "Risk Management of Credit Cards through Machine Learning Methods"
+author: "STAT 432 Group 3 - Yuhui Luo (yuhuil2), Adlai Stevenson (aesteve2), Kevin Wong (kjwong2), Kailun Zheng (kailunz2)"
+date: "May 9, 2018"
+abstract: "Financial statistical reports reveal that over 70% of debt originates from non-performing credit card loans, which are debts resulted from borrowed money unable to be paid in full for at least 90 days. To address this problem, we designed several statistical models to predict a customer’s default status of whether or not they are in debt. In our analysis, our RandomForest models provided the best results of all our models tested, with our focus primarily on each model’s Test ROC results. Our particular RandomForest model of choice posted a Test ROC result of 0.664 and Test Accuracy result of 0.819. Moving forward, we would like to incorporate a business metric within risk management that properly accounts for our results generated from statistical modelling methods, as well as providing the same statistical methods on larger data sources with more variables that can account for results that can potentially be more accurate."
+output: 
+  html_document: 
+    theme: flatly
+    toc: true
+---
+
+***
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+# load all packages
+library(MASS)
+library(caret)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(mlbench)
+library(ISLR)
+library(ellipse)
+library(randomForest)
+library(gbm)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(klaR)
+library(gam)
+library(e1071)
+library(gbm)
+library(readr)
+library(xgboost)
+library(ROCR)
+library(pROC)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+
+```{r, echo = FALSE}
+# load dataset
+credit_data = read.csv("credit_data.csv")
+credit_data = credit_data[-1]
+```
+
+```{r, echo = FALSE}
+# transfer the data of eduaction, sex, and marriage
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 0, 5, credit_data$EDUCATION)
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 0, 3, credit_data$MARRIAGE)
+credit_data$SEX_M = ifelse(credit_data$SEX == 1, 1, 0)
+credit_data$SEX_F = ifelse(credit_data$SEX == 2, 1, 0)
+credit_data$EDUCATION = ifelse(credit_data$EDUCATION == 1, "Graduate", 
+                               ifelse(credit_data$EDUCATION == 2, "College",
+                                      ifelse(credit_data$EDUCATION == 3, "HighSchool",
+                                             ifelse(credit_data$EDUCATION == 4, "Other", "Unknown"))))
+credit_data$MARRIAGE = ifelse(credit_data$MARRIAGE == 1, "Married",
+                              ifelse(credit_data$MARRIAGE == 2, "Single", "Other"))
+```
+
+```{r, echo = FALSE}
+# dummy coding
+
+dmy_edu = dummyVars(" ~ EDUCATION", data = credit_data)
+new_edu = predict(dmy_edu, newdata = credit_data)
+
+dmy_mar = dummyVars(" ~ MARRIAGE", data = credit_data)
+new_mar = predict(dmy_mar, newdata = credit_data)
+
+# combine dummied coded variables with the original dataframe
+credit_new = cbind(credit_data, new_edu, new_mar)
+
+# drop original categorical variables and ID
+drop_vars = names(credit_new) %in% c("ID", "SEX", "EDUCATION", "MARRIAGE")
+credit_new = credit_new[!drop_vars]
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+cred_idx = createDataPartition(credit_new$DEFAULT, p = 0.8, list = FALSE)
+
+levels(credit_new$DEFAULT) = c("default", "no_default")
+credit_new$DEFAULT = factor(credit_new$DEFAULT)
+cred_trn = credit_new[cred_idx, ]
+cred_tst = credit_new[-cred_idx, ]
+```
+
+***
+
+# Introduction
+
+## Background
+
+Statistics from Financial Supervisory Commission (FSC) of Taiwan show that a remarkable 70.78% of bad loans in 2006 originated from non-performing credit card loans, which are debts resulted from borrowed money unable to be paid in full for at least 90 days. More shocking, Taiwan’s high rate of credit card debt was subsequently linked to the country’s 2006 suicide rate, which increased overwhelmingly by 22.9% compared to the previous annual rate[1].  
+
+Financial burdens in life are the source of stress for a great majority of individuals, and it is very distressing and unfortunate that financial debt can result in tragic outcomes. We believe that a proper analysis of a credit card data source could provide companies with statistical models that allow them to better classify and interact with their indebted customers placed within their Collections departments, and also help customers pay off their debts in more efficient manners. Thus, potential insights gained from our statistical models could improve the working methods of credit card companies and the lifestyles of their customers.  
+
+## Goals
+
+2005 was a critical year for Taiwan, as it led to the credit card crisis in 2006. As machine learning has become more widely integrated into the finance industry, we wanted to explore how it could have helped detect credit card defaults in Taiwan during 2005 using historical information, such as past payment records and the payment status for each customer. Also, we wanted to gauge risk by predicting the default amount in New Taiwan Dollar, which is formulated as predicted probability of default multiplied by the most recent credit card bill amount. 
+
+Equipped with both the default likelihood and the potential financial loss, credit card companies could assign people into different risk categories and act accordingly to either prevent the default from happening or reduce the financial loss in the event of a default. Machine learning methods such as RandomForest could also point out the most important variables for predicting default, which could help the credit card companies to narrow their focus when analyzing their troves of customer data when resources are limited. More importantly, the information we’ve gained from historical data could provide valuable insights for U.S. credit card companies with interests in expanding their businesses to Taiwan.  
+
+## Data
+
+Our [dataset](https://archive.ics.uci.edu/ml/datasets/default+of+credit+card+clients#) for this project was stored in the University of California, Irvine Machine learning Repository. This dataset, which we named as `credit_data`, consists of `r nrow(credit_data)` observations of Taiwanese credit card customers with a total of `r ncol(credit_data)` features relating to history of payment from April to September 2005, bill statements from April to September 2005, marital status, and other customer demographic information. The credit card customers were classified if they would make payments or not (yes = 1, no = 0) for next month, which was indicated by the variable `DEFAULT` in the dataset. Below is a quick view of the distribution of our target variable `DEFAULT`.  
+
+```{r target-analysis, echo = FALSE}
+table(credit_data$DEFAULT)
+```
+
+It was noted that the disproportion of two classes created imbalance in the dataset, which could have negative impact on prediction accuracy. Later, we will use a different performance metric to address this issue. Tree-based algorithms such as RandomForest also deals with the imbalance in the data by using hierarchical structure to learn signals from both classes.  
+
+***
+
+# Methods
+
+## Data Preprocessing
+
+After observing the data, we immediately removed the `ID` variable from the dataset. The `ID` of a particular customer will not be helpful to predicting `DEFAULT` status. Next, we created dummy variables for the categorical variables. These categorical variables were `SEX`, `MARRIAGE`, and `EDUCATION`. We made them into new variables based on the categorical variable response, such as `MARRIAGEOther` or `EDUCATIONGraduate`. We needed to convert our factor variables into dummy variables so that we could form Logistic Regression models.
+
+## Variable Screening (Exploratory Data Analysis)
+
+According to the GBM variable importance plot and the single classification tree, `PAY_1` and `PAY_2` are the two most important variables to predicting `DEFAULT`. According to the RandomForest variable importance model, `PAY_1` is the most important variable to predicting `DEFAULT` status, based on its IncNodePurity. For making models, we will consider all variables for predicting `DEFAULT` status, but we will pay special attention to `PAY_1` and `PAY_2`.
+
+```{r, echo = FALSE}
+# accuracy function
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+```{r,fig.height  = 25, fig.width = 18}
+# get variable importance by using GBM
+cred_boost = gbm((as.numeric(DEFAULT) - 1) ~ ., data = cred_trn, distribution = "bernoulli", n.trees = 5000, interaction.depth = 4, shrinkage = 0.01)
+summary(cred_boost)
+```
+
+```{r, echo = FALSE,fig.height  = 25, fig.width = 18}
+# get variable importance by using RandomForest
+mod_rf = randomForest(DEFAULT ~ ., data = cred_trn)
+
+pred_rf_trn = predict(mod_rf, newdata = cred_trn)
+pred_rf_tst = predict(mod_rf, newdata = cred_tst)
+
+Conf_level = 0.20
+pred_rf_trn_response = ifelse(pred_rf_trn > Conf_level, 1, 0)
+pred_rf_tst_response = ifelse(pred_rf_tst > Conf_level, 1, 0)
+
+varImpPlot(mod_rf, main = "Variable Importance, RF", type = 2, pch = 16)
+grid()
+```
+
+```{r, echo = FALSE}
+# now we would like to update the new train and new test 
+# by the result from selection from GBM and RandomForest
+
+cred_trn_new = cred_trn[, 1:21]
+levels(cred_trn_new$DEFAULT) = c("default", "no_default")
+cred_tst_new = cred_tst[, 1:21]
+levels(cred_tst_new$DEFAULT) = c("default", "no_default")
+```
+
+## Model Building
+
+Models used in this project include RandomForest, Naive Bayes, Extreme Gradient Boost, and Logistic Regression. The accuracy of the RandomForest was about 20% higher than Naive Bayes and Logistic Regression, so we ignored these methods. XGBoost had a higher training accuracy but a lower testing accuracy than the RandomForest, so we decided to only focus on RandomForest.
+
+After decided to continue with only RandomForest models, we wanted to experiment with different variables in our model. Overall, we made sure to include `PAY_1` and `PAY_2` in every model. We made several models, consisting of variations of main effects, interaction effects, and polynomial effects.
+
+```{r, echo = FALSE}
+# six forms for modeling
+small_form = formula(DEFAULT ~ PAY_1 + PAY_2)
+
+int_form   = formula(DEFAULT ~ PAY_1 * PAY_2)
+
+poly_form  = formula(DEFAULT ~ PAY_1 + PAY_2 + I(PAY_1 ^ 2) + I(PAY_2 ^ 2))
+
+big_form   = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6)
+
+huge_form  = formula(DEFAULT ~ LIMIT_BAL + AGE + PAY_1 + PAY_2 + PAY_3 + PAY_4 
+                     + PAY_5 + PAY_6 + BILL_AMT1 + BILL_AMT2 + BILL_AMT3 
+                     + BILL_AMT4 + BILL_AMT5 + BILL_AMT6 + PAY_AMT1 + PAY_AMT2
+                     + PAY_AMT3 + PAY_AMT4 + PAY_AMT5 + PAY_AMT6
+                     + I(LIMIT_BAL ^ 2) + I(AGE ^ 2) + I(PAY_1 ^ 2) + I(PAY_2 ^ 2)                      +
+                     + I(PAY_3 ^ 2) + I(PAY_4 ^ 2) + I(PAY_5 ^ 2) + I(PAY_6 ^ 2) 
+                     + I(BILL_AMT1 ^ 2) + I(BILL_AMT2 ^ 2) + I(BILL_AMT3 ^ 2) 
+                     + I(BILL_AMT4 ^ 2) + I(BILL_AMT5 ^ 2) + I(BILL_AMT6 ^ 2) 
+                     + I(PAY_AMT1 ^ 2) + I(PAY_AMT2 ^ 2) + I(PAY_AMT3 ^ 2) 
+                     + I(PAY_AMT4 ^ 2) + I(PAY_AMT5 ^ 2) + I(PAY_AMT6 ^ 2))
+
+full_form  = formula(DEFAULT ~ .)
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_small_form_roc = train(form = small_form,
+                              data = cred_trn_new,
+                              method = "rf",
+                              trControl = trainControl(method = "cv",
+                                                       classProbs = TRUE,
+                                                       summaryFunction = twoClassSummary),
+                              metric = "ROC")
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_int_form_roc = train(form = int_form,
+                            data = cred_trn_new,
+                            method = "rf",
+                            trControl = trainControl(method = "cv",
+                                                     classProbs = TRUE,
+                                                     summaryFunction = twoClassSummary),
+                            metric = "ROC")
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_poly_form_roc = train(form = poly_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_big_form_roc = train(form = big_form,
+                            data = cred_trn_new,
+                            method = "rf",
+                            trControl = trainControl(method = "cv",
+                                                     classProbs = TRUE,
+                                                     summaryFunction = twoClassSummary),
+                            metric = "ROC")
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_huge_form_roc = train(form = huge_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+```{r, echo = FALSE}
+set.seed(3)
+rf_mod_full_form_roc = train(form = full_form,
+                             data = cred_trn_new,
+                             method = "rf",
+                             trControl = trainControl(method = "cv",
+                                                      classProbs = TRUE,
+                                                      summaryFunction = twoClassSummary),
+                             metric = "ROC")
+```
+
+## Model Comparison
+
+To achieve selecting the best model, we compared models using train ROC, sensitivity, specificity, train accuracy, test ROC, and test accuracy. Of all of these metrics, our team decided to focus most on Test ROC, because Test ROC incorporates an expected false positive rate and expected false negative rate. For our particular project, it is much more important to our team to identify false negatives than false positives. A false negative would be doing business with someone who defaults, and a false positive would be not doing business with someone who wouldn’t have defaulted. In other words, we want the least amount of false negatives because they are more harmful to the company and to the customer. The Test ROC can help us accurately choose the appropriate proportion of false negative to false positive rate.
+
+```{r, echo = FALSE}
+# create a list for all models
+model_list_class_roc = list(
+  rf_mod_small_form_roc = rf_mod_small_form_roc,
+  rf_mod_int_form_roc = rf_mod_int_form_roc,
+  rf_mod_poly_form_roc = rf_mod_poly_form_roc,
+  rf_mod_big_form_roc = rf_mod_big_form_roc,
+  rf_mod_huge_form_roc = rf_mod_huge_form_roc,
+  rf_mod_full_form_roc = rf_mod_full_form_roc
+)
+```
+
+```{r, echo = FALSE, warning = FALSE}
+cv_roc = rep(0, length(model_list_class_roc))
+cv_sens= rep(0, length(model_list_class_roc))
+cv_spec= rep(0, length(model_list_class_roc))
+cv_acc = rep(0, length(model_list_class_roc))
+test_acc = rep(0, length(model_list_class_roc))
+for (i in seq_along(model_list_class_roc)) {
+  cv_roc[i] = model_list_class_roc[[i]]$results$ROC
+  cv_sens[i] = model_list_class_roc[[i]]$results$Sens
+  cv_spec[i] = model_list_class_roc[[i]]$results$Spec
+  cv_acc[i] = accuracy(cred_trn_new$DEFAULT, predict(model_list_class_roc[[i]], newdata = cred_trn_new))
+  test_acc[i] = accuracy(cred_tst_new$DEFAULT, predict(model_list_class_roc[[i]], newdata = cred_tst_new))
+}
+```
+
+```{r, echo = FALSE}
+cv_test_roc = rep(0, length(model_list_class_roc))
+test_acc = rep(0, length(model_list_class_roc))
+for (i in seq_along(model_list_class_roc)) {
+  test_prob = predict(model_list_class_roc[[i]], newdata = cred_tst_new)
+  test_roc = roc(cred_tst_new$DEFAULT ~ as.numeric(test_prob), plot = FALSE, print.auc = TRUE)
+  cv_test_roc[i] = as.numeric(test_roc$auc)
+}
+```
+
+***
+
+# Results
+
+```{r, echo = FALSE}
+results_class = data.frame(models = c("RandomForest + Small Form", "RandomForest + Interaction Form",
+                                      "RandomForest + Poly Form", "RandomForest + Big Form",
+                                      "RandomForest + Huge Form", "RandomForest + Full Form"), 
+                           cv_roc = cv_roc,
+                           sd_sens = cv_sens,
+                           cv_spec = cv_spec,
+                           cv_acc = cv_acc,
+                           test_roc= cv_test_roc,
+                           test_acc = test_acc)
+
+colnames(results_class) = c("Method + Features", "ROC", "Sensitivity","Specificity","Train Accuracy","Test ROC","Test Accuracy")
+
+rownames(results_class) = NULL
+
+kable(results_class, format = "html", digits = 3) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE) %>%
+  row_spec(row = 6, bold = TRUE, color = "white", background = "lightgreen")
+```
+
+We selected the `rf_mod_full_form_roc` model because it has the highest Test ROC.
+
+***
+
+# Discussion
+
+```{r, echo = FALSE}
+# for the histogram 
+
+#first create new variables that is the multiplication 
+# of the probability of the default and BILL_AMT1
+credit_data$balance_bill_amt1 = credit_data$BILL_AMT1*(predict(rf_mod_full_form_roc, credit_data, "prob")["default"])
+```
+
+```{r, echo = FALSE}
+# convert all the negative value to zero 
+credit_data$balance_bill_amt1[which(credit_data$balance_bill_amt1 < 0), ] = 0  
+
+# create new variable and store all the 
+# Estimated Default Balance
+
+credit_data$balance_bill_amt1[which(credit_data$balance_bill_amt1 >= 200000), ] = 200000 #cap 
+
+balance = credit_data$balance_bill_amt1[ ,1]
+```
+
+In real life, we would like to have a business metric for risk management of credit cards in addition to the statistical metric (i.e. ROC). There are two common scenarios of default - a credit card holder could have 
+A low probability of default but high debt balance or
+A high probability of default but low debt balance
+
+Because of this, measuring risk only by likelihood of default could be misleading. 
+
+Using the selected model, we ran predictions on the entire dataset to obtain the estimated likelihood of default. The following formula was then utilized to calculate the expected loss in NT dollars in order to measure the potential financial loss to the creditors.
+
+$$\text{Estimated Default Amount} = \text {Predicted Probability of Default} * \text{`BILL_AMT1`}$$
+
+To reduce the impact of extreme values, “cap and floor” was applied to the estimated default amount with the cap at \$200,000 and the floor at \$0. The histogram below displays the distribution of adjusted estimated default amount for all the observations in our dataset. The exponential distribution was expected to some extent because the majority of people didn’t carry extremely high balance. About 81% of card holders have an estimated default amount less than or equal to \$50,000 NT dollars. 
+
+```{r, echo = FALSE}
+# histogram for all customers
+hist(balance,
+     col = "dodgerblue",
+     xlim = c(min(balance), max(balance)),
+     breaks = seq(0, 200000, 20000),
+     xlab = "Estimated Default Amount (NT Dollars)",
+     main = "Histogram of Estimated Default Balance (All)")
+```
+
+An estimated default amount of \$50,000 NT dollars may be overwhelming due to the difference in currency exchange rate between NT dollars and US dollars. For easier interpretation, we converted \$50,000 NT dollars into \$1,515 US dollars using the rough average exchange rate of 33.0 in the year of 2005. Given the fact that the average credit card debt in the U.S. in 2005 was around \$5,000 US dollars, it makes more sense to put the threshold at \$5,000 NT dollars for assigning people into the low-risk group.
+
+We then plot a histogram for the rest of observations excluding the ones assigned in the low-risk group, and come up with thresholds for assigning them into three more risky categories. These thresholds are subjective and can be adjusted according to the needs of creditors. 
+
+```{r, echo = FALSE}
+# create new variable that is more risky 
+balance_morerisk = balance[which(balance > 50000)]
+
+hist(balance_morerisk,
+     col = "orange",
+     xlim = c(min(balance_morerisk), max(balance_morerisk)),
+     xlab = "Estimated Default Amount (NT Dollars)",
+     main = "Histogram for Estimated Default Balance (More Risky Groups)")
+```
+
+Based on the distribution, one potential partitioning could be - 
+
+* \$0 - \$10,000 NT dollars, Low Risk
+* \$10,000 - \$50,000 NT dollars, Low-to-Medium Risk
+* \$50,000 - \$100,000 NT dollars, Medium Risk
+* \$100,000 - \$150,000 NT dollars, High Risk
+* \$150,000+ NT dollars, Extremely-High Risk
+
+For tight risk management, there are a few actions can be taken to the more risky groups by the credit card companies -
+ 
+* Extremely-High Risk
+  - Permanently freeze accounts 
+  - Raise APR (annual percentage rate)
+* High Risk Group
+  - Temporarily freeze account as a warning
+  - Raise APR (annual percentage rate)
+  - Cut credit limit
+* Medium Risk Group
+  - Disapprove applications for another credit card
+	- Cut credit limit	
+* Low-to-Medium Risk Group
+	- Disapprove request for credit line increase
+
+## Future improvements
+
+Note that the dataset being used only contain 30 variables, which is very likely not sufficient for making accurate predictions. Provided with more information of the credit card holder, we would have been able to build a more robust model. Information that could potentially improve the model include -
+ 
+* Occupation
+* Employment status
+* Estimated total annual income
+* Details about the living situation
+	- Homeowner/renter?
+	- Monthly rent/mortgage
+* Details about other debts
+	- Do you have an auto loan/student loan?
+	- How much is your monthly payment?
+* FICO score from the credit report  
+
+Unlike the U.S. where credit score is part of your life, Taiwan hasn't fully established a credit system as it has mostly been a cash economy. This makes it unrealistic for credit card companies to request credit report for Taiwanese applicants. However, this could apply to other international markets that have a more mature credit system.  
+
+Another area could potentially be improved is the machine learning methods for modeling. Xgboost and neural network are two good candidates for improving prediction accuracy.
+
+***
+
+# Appendix
+
+
+## Data Dictionary
+
+| Variable Name | Description                                                                                                 | Variable Type |
+| ------------- | :---------------------------------------------------------------------------------------------------------: | :-----------: |
+| ID            | ID for each client.                                                                                         | Integer        |
+| LIMIT_BAL | Amount of given credit in NT dollars (includes individual family/supplementary credit).                     | Integer       |
+| SEX           | Gender (1 = male, 2 = female).                                                                              | Integer        |
+| EDUCATION     | (1 = graduate school, 2 = university, 3 = high school, 4 = others, 5 = unknown, 6 = unknown)                | Integer        |
+| MARRIAGE      | marital status (1 = married, 2 = single, 3 = others).                                                       | Integer        |
+| AGE           | Age in years.                                                                                               | Integer       |
+| PAY_1 - PAY_6 | Repayment status from April to September, 2005: PAY_1 = the repayment status in September, 2005; ... ; PAY_6 = the repayment status in April, 2005. The measurement scale for the repayment status is -1: = pay duly; 1 = payment delay for one month, ... ; 8 = payment delay for eight months.                                                                                                                                                         | Integer       |
+| BILL_AMT1 - BILL_AMT6 | Amount of bill statement (NT dollar). BILL_AMT1 = amount of bill statement in September, 2005; ... ; BILL_AMT6 = amount of bill statement in April, 2005.                                                                                                                  | Integer       |
+| PAY_AMT1 - PAY_AMT6 | Amount of previous payment (NT dollar). PAY_AMT1 = amount paid in September, 2005; ... ; PAY_AMT6 = amount paid in April, 2005.                                                                                                                                             | Integer       |
+| DEFAULT         | Default payment (1 = yes; 0 = no).                                                                        | Integer        |
+
+**NOTE:** When we loaded the data, all of the variables are integer variables as default. We adjusted these variables accordingly.
+
+
+## Sources
+
+1.  [https://sevenpillarsinstitute.org/case-studies/taiwans-credit-card-crisis/](https://sevenpillarsinstitute.org/case-studies/taiwans-credit-card-crisis/)  
+
+2. [https://www.poundsterlinglive.com/bank-of-england-spot/historical-spot-exchange-rates/usd/USD-to-TWD](https://www.poundsterlinglive.com/bank-of-england-spot/historical-spot-exchange-rates/usd/USD-to-TWD)
+
+3. [https://www.valuepenguin.com/average-credit-card-debt](https://www.valuepenguin.com/average-credit-card-debt)
+
+4. [http://www.vrl-financial-news.com/cards--payments/cards-international/issues/ci-2007/ci375/taiwan%E2%80%99s-credit-crisis-the-ca.aspx](http://www.vrl-financial-news.com/cards--payments/cards-international/issues/ci-2007/ci375/taiwan%E2%80%99s-credit-crisis-the-ca.aspx)  
+
+5. [https://archive.ics.uci.edu/ml/datasets/default+of+credit+card+clients#](https://archive.ics.uci.edu/ml/datasets/default+of+credit+card+clients#)  
+

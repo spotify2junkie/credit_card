@@ -1,0 +1,18 @@
+---
+title: "Group-proj"
+author: "Yuhui Luo"
+date: "4/25/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#
+
+```{r, fig.height = 8, fig.width = 12,}
+cred_boost = gbm(DEFAULT ~ ., data = cred_trn, distribution = "bernoulli",
+                  n.trees = 5000, interaction.depth = 4, shrinkage = 0.1)
+summary(cred_boost)
+```
